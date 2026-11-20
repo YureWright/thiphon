@@ -68,6 +68,7 @@ const el = {
   songList: $('songList'),
   confirmDialog: $('confirmDialog'),
   confirmForm: $('confirmForm'),
+  confirmTitle: $('confirmTitle'),
   confirmLyrics: $('confirmLyrics'),
   confirmStyle: $('confirmStyle'),
   confirmPrice: $('confirmPrice'),
@@ -459,6 +460,7 @@ async function prepareGenerate() {
       max_mode: el.maxMode.checked,
       amount: amount
     };
+    el.confirmTitle.textContent = state.pending.title;
     el.confirmLyrics.textContent = countChars(lyrics) + ' 字';
     el.confirmStyle.textContent = countChars(style) + ' 字';
     el.confirmPrice.textContent = formatMoney(amount);

@@ -55,6 +55,14 @@
           </div>
         </div>
 
+        <div class="song-name-row">
+          <label class="song-name-field" for="title">
+            <span>歌曲名称</span>
+            <input id="title" maxlength="100" value="司凤新作" autocomplete="off" placeholder="例如：茉莉花 · 司凤电子版">
+          </label>
+          <p class="hint">用于生成任务、确认信息和下载文件名。</p>
+        </div>
+
         <div class="panel" id="panelLyrics" role="tabpanel">
           <label class="sr-only" for="lyrics">歌词</label>
           <textarea id="lyrics" spellcheck="false" placeholder="[Verse 1]&#10;好一朵美丽的茉莉花&#10;好一朵美丽的茉莉花&#10;&#10;[Drop]&#10;通透！我悟了但没完全悟..."></textarea>
@@ -84,15 +92,12 @@
               <button class="ghost btn-sm" id="aiLyricsBtn" type="button">AI 写词 · Suno</button>
             </div>
           </div>
-          <p class="hint">免费起草在本机完成，不会上传。AI 写词会把想法发送到 suno-api.io，通常免费，超出配额可能约 ¥0.10。</p>
+          <p class="hint">免费起草在本机完成，不会上传。AI 写词会把想法发送到 suno-api.io，通常免费，超出配额可能约 ¥0.10；写词时会自动压缩风格提示词，完整风格仍用于最终生成。</p>
         </div>
 
         <details class="advanced" id="advanced">
-          <summary>进阶设置 <span>标题、风格提示词、模型</span></summary>
+          <summary>进阶设置 <span>风格提示词、模型</span></summary>
           <div class="advanced-grid">
-            <label>歌曲标题
-              <input id="title" maxlength="100" value="司凤新作" autocomplete="off">
-            </label>
             <label>模型
               <select id="model">
                 <option value="suno-v6-wild" selected>Suno v6 Wild · 更疯</option>
@@ -202,6 +207,7 @@
       </div>
       <div class="confirm-box">
         <div><span>发送到</span><strong>suno-api.io</strong></div>
+        <div><span>歌曲名称</span><strong id="confirmTitle">司凤新作</strong></div>
         <div><span>歌词</span><strong id="confirmLyrics">0 字</strong></div>
         <div><span>风格提示词</span><strong id="confirmStyle">0 字</strong></div>
         <div><span>预计费用</span><strong id="confirmPrice">¥ --</strong></div>

@@ -45,6 +45,7 @@ _BALANCE_CACHE: dict[str, Any] = {"at": 0.0, "value": None}
 _PRICE_CACHE: dict[str, Any] = {"at": 0.0, "value": None}
 ACCOUNT_CACHE_TTL = 45.0
 SIFENG_STYLE = (
+    "lead-vocal scat break, prominent beatboxing, mouth percussion, foreground ad-libs, "
     "Chinese EDM, 128 BPM four-on-the-floor, bright synth-pluck arpeggios, synth brass, "
     "sidechained bass, punchy snare, crisp hi-hats, huge chorus drop, rising sweep, "
     "gruff smoky male baritone, stacked vocal doubles, raw chest-voice ad-libs, "
@@ -53,17 +54,22 @@ SIFENG_STYLE = (
     "call-and-response, hype man ad-libs, dead-serious theatrical delivery of absurd lyrics, "
     "slightly off-key, wild nonsense shouts, cheap club energy, unhinged, comedic, not polished"
 )
-SIFENG_ADLIBS = ("(Woo!)", "(Yeah!)", "(Uh!)", "(Ho!)")
+SIFENG_LYRICS_STYLE = (
+    "Chinese EDM, 128 BPM, heavy bass, theatrical male vocal, screaming ad-libs, "
+    "jazz scat, absurd comedic lyrics, high-energy, unhinged"
+)
+SIFENG_LYRICS_STYLE_FALLBACK = (
+    "Chinese EDM, 128 BPM, theatrical male vocal, scat ad-libs"
+)
+MAX_LYRICS_STYLE_CHARS = 300
+SIFENG_ADLIBS = ("WOO!", "YEAH!", "UH!", "HO!")
 SIFENG_SCAT_LINES = (
-    "ba-da-ba-da-ba (Woo!)",
-    "skrrt skrrt (Uh!)",
-    "ya-ya-ya-ya (Hey!)",
-    "brrr-ra-ta-ta (Ho!)",
-    "shoo-bee-doo-wop (Woo!)",
-    "beng-ba-beng-ba (Woo!)",
-    "邦吧邦吧邦吧 (Ho!)",
-    "乌鲁鲁 乌鲁鲁 (Yeah!)",
-    "(WOO!!!)",
+    "[scream] WOO! WOO! WOO!",
+    "ba-da-ba-da-ba",
+    "skrrt skrrt",
+    "beng-ba-beng-ba",
+    "[scream] YEAH! YEAH!",
+    "邦吧邦吧邦吧",
 )
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".opus"}
 OUTPUT_EXTENSIONS = {".mp3", ".wav"}
@@ -137,6 +143,43 @@ def selected_model(value: Any = None) -> str:
 
 def utf16_length(value: str) -> int:
     return len(value.encode("utf-16-le")) // 2
+
+
+def friendly_suno_error(message: str) -> str:
+    text = str(message or "").strip()
+    if re.search(r"too long|shorten it|too many characters|prompt is too long", text, re.I):
+        return "上游认为提交内容过长。请缩短歌词、想法或风格提示词后重试。"
+    return text
+
+
+def is_content_too_long_error(value: Any) -> bool:
+    text = str(value or "")
+    return bool(
+        re.search(
+            r"内容过长|提交内容过长|too long|shorten it|too many characters|prompt is too long",
+            text,
+            re.I,
+        )
+    )
+
+
+def compact_lyrics_style(style: str, limit: int = MAX_LYRICS_STYLE_CHARS) -> str:
+    text = str(style or "").strip()
+    if not text:
+        return SIFENG_LYRICS_STYLE
+    if utf16_length(text) <= limit:
+        return text
+    if text == SIFENG_STYLE:
+        return SIFENG_LYRICS_STYLE
+    selected: list[str] = []
+    for part in (item.strip() for item in re.split(r"[,，、;；]", text)):
+        if not part:
+            continue
+        candidate = ", ".join([*selected, part])
+        if utf16_length(candidate) > limit:
+            break
+        selected.append(part)
+    return ", ".join(selected) if selected else text[:limit].strip(" ,")
 
 
 def require_text_limit(field: str, value: str, limit: int, label: str) -> None:
@@ -262,12 +305,16 @@ def _add_adlib(line: str, index: int) -> str:
         return clean
     if re.search(r"\b(?:woo+|yeah|uh|ho|hey|skrrt|brrr|beng)\b|邦吧|乌鲁鲁", clean, re.I):
         return clean
-    return f"{clean} {SIFENG_ADLIBS[index % len(SIFENG_ADLIBS)]}"
+    if index % 2:
+        return clean
+    return f"{clean}\n[scream] {SIFENG_ADLIBS[(index // 2) % len(SIFENG_ADLIBS)]}"
 
 
 def _scream_adlibs(line: str) -> str:
     text = str(line or "").strip()
     if not text:
+        return text
+    if "[scream]" in text:
         return text
 
     def replace_parenthetical(match: re.Match[str]) -> str:
@@ -352,8 +399,7 @@ def refine_sifeng_lyrics(lyrics: str, title: str = "") -> dict[str, Any]:
             section, cursor = _section_lines("Pre-Chorus", pre, cursor)
             output.extend(section)
         else:
-            output.append("[Pre-Chorus]")
-            notes.append("歌词较短，已自动补齐 Pre-Chorus")
+            notes.append("歌词较短，未单独生成 Pre-Chorus")
         output.extend(["", "(乌鲁鲁 乌鲁鲁)", "(WOO!!!)", ""])
         section, cursor = _section_lines("Drop", drop_lines, cursor)
         output.extend(section)
@@ -363,24 +409,17 @@ def refine_sifeng_lyrics(lyrics: str, title: str = "") -> dict[str, Any]:
             output.extend(section)
             output.append("")
         else:
-            output.extend([
-                "[Bridge]",
-                "你说人生 是一场修行 (Woo!)",
-                "我说人生 是一碗隔夜面 (Yeah!)",
-                "热一热 还能吃 (Uh!)",
-                "加个蛋 就圆满 (Ho!)",
-                "",
-            ])
-            notes.append("已补一段 Bridge 歌词")
+            notes.append("歌词较短，未自动补写 Bridge")
         section, cursor = _section_lines("Final Drop", drop_lines, cursor)
         output.extend(section)
         output.extend(["", "[Outro]", "(呼——哈——)", "(WOO!!!)", "(通透!)", "(邦吧邦吧邦吧)", "(乌鲁鲁 乌鲁鲁)", "(收!)"])
         notes.insert(0, "已重组为 Intro / Verse / Drop / Scat Break / Outro")
-        notes.append("已按句加入 Woo / Yeah / Uh / Ho ad-lib")
+        notes.append("已隔句插入独立 Woo / Yeah / Uh / Ho 尖叫")
 
     output = [_scream_adlibs(line) for line in output]
+    lyrics_text = re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
     return {
-        "lyrics": "\n".join(output).strip(),
+        "lyrics": lyrics_text,
         "title": str(title or "").strip() or "司凤原创",
         "notes": notes,
     }
@@ -627,7 +666,7 @@ class SunoApi:
             ) from exc
         except urllib.error.HTTPError as exc:
             raw = exc.read()
-            message = self._error_message(raw).strip()
+            message = friendly_suno_error(self._error_message(raw).strip())
             if exc.code == 429:
                 retry_after = exc.headers.get("Retry-After") if exc.headers else None
                 wait_seconds = 60
@@ -658,11 +697,11 @@ class SunoApi:
             raise AppError(502, "BAD_RESPONSE", "Suno API 返回了无法解析的数据。") from exc
         if isinstance(parsed, dict):
             if parsed.get("success") is False:
-                message = self._error_message(raw) or "Suno API 拒绝了请求。"
+                message = friendly_suno_error(self._error_message(raw)) or "Suno API 拒绝了请求。"
                 raise AppError(400, "SUNO_REJECTED", redact(message, self.api_key), parsed)
             code = parsed.get("code")
             if isinstance(code, int) and code not in (0, 200):
-                message = self._error_message(raw) or "Suno API 返回业务错误。"
+                message = friendly_suno_error(self._error_message(raw)) or "Suno API 返回业务错误。"
                 raise AppError(400, "SUNO_REJECTED", redact(message, self.api_key), parsed)
         return parsed
 
@@ -674,17 +713,29 @@ class SunoApi:
 
     def _error_message(self, raw: bytes) -> str:
         payload = self._safe_json(raw)
+
+        def pick(value: Any) -> str:
+            if not isinstance(value, dict):
+                return ""
+            for key in ("message", "msg", "detail", "error"):
+                item = value.get(key)
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+                if isinstance(item, dict):
+                    nested = pick(item)
+                    if nested:
+                        return nested
+            return ""
+
         if isinstance(payload, dict):
-            for key in ("message", "error", "msg", "detail"):
-                value = payload.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
+            direct = pick(payload)
+            if direct:
+                return direct
             data = payload.get("data")
             if isinstance(data, dict):
-                for key in ("message", "error", "msg", "detail"):
-                    value = data.get(key)
-                    if isinstance(value, str) and value.strip():
-                        return value.strip()
+                nested = pick(data)
+                if nested:
+                    return nested
         return raw.decode("utf-8", errors="replace")[:500]
 
     def balance(self, timeout: int = 75) -> dict[str, Any]:
@@ -936,13 +987,24 @@ class SunoApi:
         model: str = MODEL,
     ) -> dict[str, Any]:
         model = selected_model(model)
-        body = compact({
-            "instruction": instruction,
-            "style": style,
-            "title": title,
-            "model": model,
-        })
-        payload = self._request("/api/lyrics/generate", "POST", body, timeout=90)
+        style = compact_lyrics_style(style)
+
+        def submit(lyrics_style: str) -> Any:
+            body = compact({
+                "instruction": instruction,
+                "style": lyrics_style,
+                "title": title,
+                "model": model,
+            })
+            return self._request("/api/lyrics/generate", "POST", body, timeout=90)
+
+        try:
+            payload = submit(style)
+        except AppError as exc:
+            if not is_content_too_long_error(exc.message) or style == SIFENG_LYRICS_STYLE_FALLBACK:
+                raise
+            style = SIFENG_LYRICS_STYLE_FALLBACK
+            payload = submit(style)
         text = extract_lyrics_text(unwrap(payload))
         if not text:
             raise AppError(502, "LYRICS_INVALID", "Suno API 没有返回可用歌词。", payload)
@@ -1750,11 +1812,20 @@ class StudioHandler(BaseHTTPRequestHandler):
         if not instruction:
             raise AppError(400, "IDEA_REQUIRED", "请先写一句想法或写词要求。")
         require_text_limit("instruction", instruction, 2000, "写词要求")
-        style = str(body.get("style") or SIFENG_STYLE).strip()
+        style = compact_lyrics_style(str(body.get("style") or SIFENG_LYRICS_STYLE))
         title = str(body.get("title") or "司凤新作").strip()[:100]
         model = selected_model(body.get("model") or "suno-v6-wild")
         api = SunoApi()
-        result = api.generate_lyrics(instruction, style, title, model)
+        try:
+            result = api.generate_lyrics(instruction, style, title, model)
+        except AppError as exc:
+            if "内容过长" in exc.message:
+                raise AppError(
+                    400,
+                    "CONTENT_TOO_LONG",
+                    f"{exc.message} 当前写词要求 {utf16_length(instruction)} 字，风格 {utf16_length(style)} 字。请缩短想法或要求后重试。",
+                ) from exc
+            raise
         lyrics = result["lyrics"]
         notes: list[str] = []
         if body.get("refine", True) is not False:
@@ -1845,6 +1916,12 @@ class StudioHandler(BaseHTTPRequestHandler):
                 result = api.fresh_generate(style_tags, lyrics, title, max_mode,
                                             idempotency_key, model)
         except AppError as exc:
+            if "内容过长" in exc.message:
+                exc = AppError(
+                    400,
+                    "CONTENT_TOO_LONG",
+                    f"{exc.message} 当前歌词 {utf16_length(lyrics)} 字，风格 {utf16_length(style_tags)} 字，标题 {utf16_length(title)} 字。请删除重复段落或缩短风格提示词后重试。",
+                )
             job["status"] = "unknown" if exc.code in ("TIMEOUT", "NETWORK_ERROR") else "failed"
             job["error"] = exc.message
             STORE.add_job(job)

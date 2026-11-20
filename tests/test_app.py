@@ -336,15 +336,16 @@ class SifengLyricsTests(unittest.TestCase):
         self.assertIn("[Scat Break]", lyrics)
         self.assertIn("beng-ba-beng-ba", lyrics)
         self.assertIn("邦吧邦吧邦吧", lyrics)
-        self.assertIn("(Woo!)", lyrics)
+        self.assertIn("[scream] WOO!", lyrics)
+        self.assertIn("[scream] WOO! WOO! WOO!", lyrics)
         self.assertIn("[Outro]", lyrics)
 
     def test_refine_keeps_existing_adlibs(self):
-        source = "[Verse 1]\n第一句 (Woo!)\n第二句\n\n[Outro]\n(收!)"
+        source = "[Verse 1]\n第一句 (Woo!)\n第二句\n第三句\n\n[Outro]\n(收!)"
         result = app.refine_sifeng_lyrics(source)
         self.assertIn("第一句 [scream] (Woo!)\n", result["lyrics"])
         self.assertNotIn("第一句 (Woo!) (", result["lyrics"])
-        self.assertIn("第二句 [scream] (Yeah!)", result["lyrics"])
+        self.assertIn("第三句\n[scream] YEAH!", result["lyrics"])
 
     def test_refine_does_not_double_bare_woo(self):
         result = app.refine_sifeng_lyrics("第一句\nWOO! 明天再说吧\n第三句\n第四句")
@@ -354,11 +355,19 @@ class SifengLyricsTests(unittest.TestCase):
     def test_refine_adds_scream_before_interjections(self):
         result = app.refine_sifeng_lyrics("a\nb\nc\nd\ne\nf\ng")
         lyrics = result["lyrics"]
-        self.assertIn("[scream] (Woo!)", lyrics)
-        self.assertIn("ba-da-ba-da-ba [scream] (Woo!)", lyrics)
+        self.assertIn("a\n[scream] WOO!", lyrics)
+        self.assertIn("[Scat Break]\n[scream] WOO! WOO! WOO!", lyrics)
         self.assertIn("[scream] (WOO!!!)", lyrics)
+        self.assertNotIn("[scream] WOO! [scream] WOO!", lyrics)
         self.assertNotIn("[scream] [scream]", lyrics)
         self.assertNotIn("[scream] (呼——哈——)", lyrics)
+
+
+    def test_refine_does_not_invent_bridge(self):
+        result = app.refine_sifeng_lyrics("第一句\n第二句\n第三句\n第四句")
+        self.assertNotIn("你说人生", result["lyrics"])
+        self.assertNotIn("[Bridge]", result["lyrics"])
+        self.assertIn("第一句\n[scream] WOO!", result["lyrics"])
 
     def test_refine_scream_tags_are_idempotent(self):
         once = app.refine_sifeng_lyrics("a\nb\nc\nd\ne\nf\ng")["lyrics"]
@@ -407,6 +416,80 @@ class LyricsGenerationTests(unittest.TestCase):
         self.assertEqual(seen["body"]["model"], "suno-v6-wild")
         self.assertNotIn("prompt", seen["body"])
         self.assertEqual(result["lyrics"], "第一句\n第二句")
+
+
+class LyricsStyleCompactionTests(unittest.TestCase):
+    def test_default_style_is_compacted_for_lyrics(self):
+        compact = app.compact_lyrics_style(app.SIFENG_STYLE)
+        self.assertEqual(compact, app.SIFENG_LYRICS_STYLE)
+        self.assertLessEqual(app.utf16_length(compact), app.MAX_LYRICS_STYLE_CHARS)
+
+    def test_short_custom_style_is_preserved(self):
+        self.assertEqual(app.compact_lyrics_style("Chinese EDM"), "Chinese EDM")
+
+    def test_chinese_comma_style_is_compacted(self):
+        style = "Chinese EDM, " + "heavy bass， " * 80 + "scat"
+        compact = app.compact_lyrics_style(style)
+        self.assertLessEqual(app.utf16_length(compact), app.MAX_LYRICS_STYLE_CHARS)
+
+    def test_generate_lyrics_payload_uses_compact_style(self):
+        api = object.__new__(app.SunoApi)
+        seen = {}
+
+        def request(path, method="GET", body=None, timeout=75):
+            seen.update({"path": path, "body": body})
+            return {"data": {"edited_lyrics": "第一句\n第二句"}}
+
+        api._request = request
+        api.generate_lyrics("写一首通透的歌", app.SIFENG_STYLE, "通透", "suno-v6-wild")
+        self.assertLessEqual(app.utf16_length(seen["body"]["style"]), app.MAX_LYRICS_STYLE_CHARS)
+
+    def test_generate_lyrics_retries_with_fallback_style(self):
+        api = object.__new__(app.SunoApi)
+        bodies = []
+
+        def request(path, method="GET", body=None, timeout=75):
+            bodies.append(body)
+            if len(bodies) == 1:
+                raise app.AppError(
+                    400,
+                    "SUNO_HTTP",
+                    "That's a bit too long. Please shorten it and try again.",
+                )
+            return {"data": {"edited_lyrics": "line one\nline two"}}
+
+        api._request = request
+        result = api.generate_lyrics("short idea", app.SIFENG_STYLE, "title", "suno-v6-wild")
+        self.assertEqual(result["lyrics"], "line one\nline two")
+        self.assertEqual(bodies[0]["style"], app.SIFENG_LYRICS_STYLE)
+        self.assertEqual(bodies[1]["style"], app.SIFENG_LYRICS_STYLE_FALLBACK)
+
+    def test_content_too_long_error_messages_are_detected(self):
+        self.assertTrue(app.is_content_too_long_error("That's a bit too long."))
+        self.assertTrue(app.is_content_too_long_error("上游认为提交内容过长。"))
+        self.assertFalse(app.is_content_too_long_error("rate limited"))
+
+
+class UpstreamErrorTests(unittest.TestCase):
+    def test_nested_error_message(self):
+        api = object.__new__(app.SunoApi)
+        raw = json.dumps({
+            "error": {
+                "message": "That's a bit too long. Please shorten it and try again.",
+                "type": "bad_response_status_code",
+            }
+        }).encode("utf-8")
+        self.assertEqual(
+            api._error_message(raw),
+            "That's a bit too long. Please shorten it and try again.",
+        )
+
+    def test_too_long_message_is_actionable(self):
+        message = app.friendly_suno_error(
+            "That's a bit too long. Please shorten it and try again."
+        )
+        self.assertIn("内容过长", message)
+        self.assertIn("缩短", message)
 
 
 class ConfigValidationTests(unittest.TestCase):
